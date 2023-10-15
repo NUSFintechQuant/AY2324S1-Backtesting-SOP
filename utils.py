@@ -167,14 +167,25 @@ class GeneticAlgorithm:
         
         return genome
     
-    def mutate(self, genome) -> [int]:
-        """ Mutates genome """
-        pass
+    def mutate(self, genome: [int]) -> [int]:
+        """ Mutates genome by randomly changing one parameter """
+        mutated_genome = genome.copy()
+        # Randomly select a gene and mutate its value
+        gene_index = random.randint(0, len(mutated_genome) - 1)
+        min_val, max_val = self.genome_sample[list(self.genome_sample.keys())[gene_index]]
+        mutated_genome[gene_index] = self.generate_randint(min_val, max_val)
+        return mutated_genome
+
+    def breed(self, genome_a: [int], genome_b: [int]) -> [int]:
+        """ Breeds offspring from two parent genomes """
+        child_genome = []
+        for gene_a, gene_b in zip(genome_a, genome_b):
+            # Randomly choose gene from parent A or B
+            child_gene = gene_a if random.random() < 0.5 else gene_b
+            child_genome.append(child_gene)
+        return child_genome
     
-    def breed(self, genome_a, genome_b) -> [int]:
-        """ Breeds offspring from 2 genome """
-        pass
-    
+
     def calculate_fitness(self, strategy: Strategy, genome: [int]) -> int:
         """ Evaluates the trading strategy """
         params = {key: genome[index] for index, key in enumerate(self.genome_sample.keys())}
@@ -190,49 +201,49 @@ class GeneticAlgorithm:
     def optimise(self, strategy: Strategy) -> [int]:
         """ Entry point to optimise strategy. Returns the best parameter genome """
         # Example
+        TERMINATION_FITNESS_THRESHOLD = 1000
+        MUTATION_RATE = 0.1
+
         strategy.reset()
         population = self.create_population(self.population_size)
         self.calculate_fitness(strategy, population[0])
+
+        found = False
+
+        while not found:
+            # Calculate fitness for each genome in the population
+            fitness_scores = [self.calculate_fitness(strategy, genome) for genome in population]
+            # Find the index of the best genome in the population
+            best_genome_index = fitness_scores.index(max(fitness_scores))
+            best_genome = population[best_genome_index]
         
-        # TODO Devan Pseudocode
-        # POPULATION_SIZE
-        # population = []
+            # Check if the best genome satisfies the termination condition
+            if max(fitness_scores) >= TERMINATION_FITNESS_THRESHOLD:
+                found = True
+                break
+            
+            # Perform selection, crossover, and mutation to create new generation
+            new_generation = []
+            # Elitism: keep the best 10% of the population
+            elite_count = int(0.1 * self.population_size)
+            # Gets the indeces of the highest fitness scores
+            elites = sorted(range(len(fitness_scores)), key=lambda k: fitness_scores[k])[-elite_count:]
+
+            # Add elites to the new generation
+            new_generation.extend([population[i] for i in elites])
+            
+            for _ in range(self.population_size - elite_count):
+                parent_a = random.choice(population)
+                parent_b = random.choice(population)
+                child_genome = self.breed(parent_a, parent_b)
+                if random.random() < MUTATION_RATE:
+                    child_genome = self.mutate(child_genome)
+                new_generation.append(child_genome)
         
-        # found = False
-        
-        
-        # while not found:
-        #     # sort the population in increasing order of fitness score
-        #     population = sorted(population, key = lambda x:x.fitness)
+            population = new_generation
+            generation += 1
     
-        #     # if the individual having lowest fitness score ie. 
-        #     # 0 then we know that we have reached to the target
-        #     # and break the loop
-        #     if population[0].fitness <= 0:
-        #         found = True
-        #         break
-    
-        #     # Otherwise generate new offsprings for new generation
-        #     new_generation = []
-    
-        #     # Perform Elitism, that mean 10% of fittest population
-        #     # goes to the next generation
-        #     s = int((10*POPULATION_SIZE)/100)
-        #     new_generation.extend(population[:s])
-    
-        #     # From 50% of fittest population, Individuals 
-        #     # will MATE to produce offspring
-        #     s = int((90*POPULATION_SIZE)/100)
-        #     for _ in range(s):
-        #         parent1 = random.choice(population[:50])
-        #         parent2 = random.choice(population[:50])
-        #         child = parent1.mate(parent2)
-        #         new_generation.append(child)
-    
-        #     population = new_generation
-    
-        #     generation += 1
-        pass
+        return best_genome
     
     def generate_randint(self, min, max) -> int:
         """ Generates random parameters """
