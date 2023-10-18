@@ -158,37 +158,51 @@ class GeneticAlgorithm:
         """ Create population of strategy parameters """
         return [self.generate_genome() for _ in range(population_size)]
     
-    def generate_genome(self) -> [int]:
+    # def generate_genome(self) -> [int]:
+    #     """ Generates strategy parameters """
+    #     genome = []
+    #     for param in list(self.genome_sample.keys()):
+    #         min_val, max_val = self.genome_sample[param]
+    #         # Shouldn't I add the param here?
+    #         genome.append(self.generate_randint(min_val, max_val))
+        
+    #     return genome
+    
+    def generate_genome(self):
         """ Generates strategy parameters """
         genome = []
         for param in list(self.genome_sample.keys()):
             min_val, max_val = self.genome_sample[param]
-            genome.append(self.generate_randint(min_val, max_val))
-        
+            param_value = self.generate_randint(min_val, max_val)
+            genome.append((param, param_value))
         return genome
     
-    def mutate(self, genome: [int]) -> [int]:
+    def mutate(self, genome):
         """ Mutates genome by randomly changing one parameter """
         mutated_genome = genome.copy()
-        # Randomly select a gene and mutate its value
-        gene_index = random.randint(0, len(mutated_genome) - 1)
-        min_val, max_val = self.genome_sample[list(self.genome_sample.keys())[gene_index]]
-        mutated_genome[gene_index] = self.generate_randint(min_val, max_val)
+        # Randomly select a parameter and mutate its value
+        param_index = random.randint(0, len(mutated_genome) - 1)
+        param_name, param_value = mutated_genome[param_index]
+        min_val, max_val = self.genome_sample[param_name]
+        mutated_value = self.generate_randint(min_val, max_val)
+        mutated_genome[param_index] = (param_name, mutated_value)
         return mutated_genome
 
-    def breed(self, genome_a: [int], genome_b: [int]) -> [int]:
+    def breed(self, genome_a, genome_b):
         """ Breeds offspring from two parent genomes """
         child_genome = []
-        for gene_a, gene_b in zip(genome_a, genome_b):
-            # Randomly choose gene from parent A or B
-            child_gene = gene_a if random.random() < 0.5 else gene_b
-            child_genome.append(child_gene)
+        for (param_name_a, param_value_a), (param_name_b, param_value_b) in zip(genome_a, genome_b):
+            # Randomly choose parameter from parent A or B
+            child_param_name = param_name_a if random.random() < 0.5 else param_name_b
+            child_param_value = param_value_a if random.random() < 0.5 else param_value_b
+            child_genome.append((child_param_name, child_param_value))
         return child_genome
     
 
     def calculate_fitness(self, strategy: Strategy, genome: [int]) -> int:
         """ Evaluates the trading strategy """
-        params = {key: genome[index] for index, key in enumerate(self.genome_sample.keys())}
+        # params = {key: genome[index] for index, key in enumerate(self.genome_sample.keys())}
+        params = {param_name: param_value for param_name, param_value in genome}
         strategy.set_params(params) # Set to params to genome
         bt = Backtest(strategy.data, strategy)
         bt.run()
@@ -204,9 +218,12 @@ class GeneticAlgorithm:
         TERMINATION_FITNESS_THRESHOLD = 1000
         MUTATION_RATE = 0.1
 
+        # LIMIT GENERATIONS
+        MAXIMUM_GENERATION = 10
+
         strategy.reset()
         population = self.create_population(self.population_size)
-        self.calculate_fitness(strategy, population[0])
+        # self.calculate_fitness(strategy, population[0])
 
         found = False
 
