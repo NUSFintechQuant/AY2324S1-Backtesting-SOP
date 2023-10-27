@@ -1,7 +1,12 @@
 import random
+import math
 import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 from enum import Enum
 from typing import Optional
+from sklearn.neighbors import LocalOutlierFactor
+from ta.momentum import RSIIndicator
 
 class Indicator:
     # TODO To be implemented by Justin
@@ -312,7 +317,98 @@ class Backtest:
         pass
     
     def event_bias_analysis(self):
-        pass
+        # mock data
+        self.data[0] = pd.DataFrame({
+            'Date': pd.date_range(start='2020-01-01', periods=365, freq='D'),
+            'Close': np.cumsum(np.random.normal(0, 1, 365)) + 100  # Starting price at 100
+        })
+        vix_data = pd.DataFrame({
+            'Date': pd.date_range(start='2020-01-01', periods=365, freq='D'),
+            'Close': np.cumsum(np.random.normal(0, 1, 365)) + 20  # Starting price at 20
+        })
+        # trade_data = pd.DataFrame({
+        #     'Date': pd.date_range(start='2020-01-01', periods=365, freq='D'),
+        #     'Returns': np.random.normal(-1, 1, 365)
+        # })
+
+        try:
+            self.local_outlier_factor()
+            self.vix_rsi(vix_data)
+            #self.outlier_analysis(trade_data) # to confirm how the trade_data is passed
+            #print(self.data[0])
+        except Exception as e:
+            print(e)
+
+    def outlier_analysis(self, trade_data, visualise = False):
+        """ Removes outliers from trade data """
+        # Calculate squared differences of returns from the mean, quartiles and IQR for the squared differences
+        trade_data['Squared_Diff'] = (trade_data['Returns'] - trade_data['Returns'].mean()) ** 2
+        Q1 = trade_data['Squared_Diff'].quantile(0.25)
+        Q3 = trade_data['Squared_Diff'].quantile(0.75)
+        IQR = Q3 - Q1
+
+        # Define potential outliers based on thresholds
+        threshold_iqr = 3 * IQR
+        threshold_top_percentile = trade_data['Squared_Diff'].quantile(0.90)
+
+        # Identify outliers based on the IQR criterion and top percentile criterion
+        outliers_iqr = trade_data[(trade_data['Squared_Diff'] - trade_data['Squared_Diff'].mean()).abs() > threshold_iqr]
+        outliers_top_percentile = trade_data[trade_data['Squared_Diff'] > threshold_top_percentile]
+        if visualise:
+            plt.figure(figsize=(12, 6))
+            plt.plot(trade_data['Date'], trade_data['Squared_Diff'], label='Squared Differences', color='b')
+            plt.scatter(outliers_top_percentile['Date'], outliers_top_percentile['Squared_Diff'], label='Outliers (Top Percentile)', color='g', marker='o')
+            plt.scatter(outliers_iqr['Date'], outliers_iqr['Squared_Diff'], label='Outliers (IQR)', color='r', marker='x')
+            plt.xlabel('Date')
+            plt.ylabel('Squared Differences')
+            plt.title('Outlier Analysis of Squared Differences')
+            plt.legend()
+            plt.show()
+
+        # Remove identified outliers
+        drop_indices = set(outliers_iqr.index.tolist() + outliers_top_percentile.index.tolist())
+        trade_data = trade_data.drop(drop_indices)
+
+    def local_outlier_factor(self, visualise = False):
+        """ Removes outliers from price data via LOF """
+        # pct change and mvg of quarter
+        p_data = self.data[0]
+        p_data['P_Change'] = p_data['Close'].pct_change() * 100
+        p_data['MA64'] =  p_data['P_Change'].rolling(window=64).mean()
+        p_data['Sq_Diff'] = abs(p_data['P_Change'] - p_data['MA64'])
+        p_data = p_data.dropna()
+
+        features = p_data[['P_Change', 'Sq_Diff']]
+        lof = LocalOutlierFactor(n_neighbors=20)
+        lof_scores = lof.fit_predict(features)
+
+        # Create a Series of outlier labels (-1 for outliers, 1 for inliers)
+        labels = pd.Series(lof_scores, index=p_data.index)
+        inliers = ((abs(p_data['P_Change']) < 2) & (labels == 1))
+        if visualise:
+            plt.figure(figsize=(12, 6))
+            plt.scatter(p_data['Date'], p_data['Close'], c=inliers, cmap='coolwarm', s=30)
+            plt.xlabel('Date')
+            plt.ylabel('Close Price')
+            plt.title('Outlier Detection using LOF')
+            plt.colorbar(label='Outlier Score')
+            plt.show()
+
+        # Remove identified outliers
+        self.data[0] = p_data[inliers]
+
+
+    def vix_rsi(self, vix_data, overbought_threshold=70, oversold_threshold=30, rsi_window=14):
+        """ Removes outliers from price data via VIX RSI """
+        # Calculate RSI for the VIX data using ta library
+        p_data = self.data[0]
+        vix_data['VIX_RSI'] = RSIIndicator(close=vix_data['Close'], window=rsi_window).rsi()
+        vix_data.drop('Close', axis=1, inplace=True)
+
+        # Merge both price and vix data, then filter based on thresholds
+        p_data = pd.merge(p_data, vix_data, on='Date', how='inner')
+        self.data[0] = p_data[(p_data['VIX_RSI'] <= overbought_threshold) & (p_data['VIX_RSI'] >= oversold_threshold)]
+
 
     def plot(self):
         """ Plots the PnL chart """
