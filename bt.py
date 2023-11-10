@@ -823,7 +823,6 @@ class Backtest:
 
         plot_objects = []
         
-    
         for resulter, data in zip(resultsWF, data_wf):
             p = self.plotOne(results=resulter, data_wf=data)
             plot_objects.append(p)
@@ -911,7 +910,6 @@ class Backtest:
 
         # Remove identified outliers
         self.data[0] = p_data[inliers]
-
 
     def vix_rsi(self, vix_data, overbought_threshold=70, oversold_threshold=30, rsi_window=14):
         """ Removes outliers from price data via VIX RSI """
