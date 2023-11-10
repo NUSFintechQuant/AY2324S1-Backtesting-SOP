@@ -6,3 +6,4 @@ numpy
 pandas
 warnings
 colorsys
+bokeh
