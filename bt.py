@@ -398,8 +398,8 @@ class Backtest:
         self._strategy = strategy
         self._results: Optional[pd.Series] = None
 
-    def runAWF(self, iter, **kwargs) -> pd.Series:
-        if not kwargs:
+    def runAWF(self, iter, strategy_params_limit) -> pd.Series:
+        if not strategy_params_limit:
             raise ValueError('Need some strategy parameters to optimize')
 
         bar = 4 + (iter - 1)
@@ -411,47 +411,41 @@ class Backtest:
 
         data_split = []
         date_range = []
+        iter_data = []
         anchored_test = 0
         for i in range(0, iter):
                 start = (iteration_points * 0)
                 end = (iteration_points * (4 + i))
                 if i == 0:
-                    anchored_test = end * 0.25
+                    anchored_test = int(end * 0.25)
                 if i == (iter):
                     end += left_over_points
                 data_split.append(data.iloc[start:end])
                 date_range.append(data.index[start].strftime('%Y-%m-%d'))
                 date_range.append(data.index[end-1].strftime('%Y-%m-%d'))
+                iter_data.append([data.iloc[0:end-anchored_test],data.iloc[end-anchored_test:end]])
         example_dates = [datetime.datetime.strptime(date, '%Y-%m-%d') for date in date_range]
 
         plt.figure(figsize=(12, 6))
         bob = 0
-        # Create horizontal bars
         for i in range(0, len(example_dates), 2):
-            
-            # Calculate the width of the blue and red parts
             width_total = example_dates[i+1] - example_dates[0]
             split = (len(data_split[bob])-anchored_test)/len(data_split[bob])
             width_blue = width_total * (split)
             width_red = width_total * (1-split)
             bob+=1
-            
-            # Blue part
             plt.barh('Iteration {}'.format(i//2 + 1),
                     left=example_dates[i],
                     width=width_blue,
                     height=1,
                     color='skyblue',
                     edgecolor='skyblue')
-            
-            # Red part
             plt.barh('Iteration {}'.format(i//2 + 1),
                     left=example_dates[i] + width_blue,
                     width=width_red,
                     height=1,
                     color='pink',
                     edgecolor='pink')
-        # x-labels
         plt.gcf().autofmt_xdate()
         myFmt = mdates.DateFormatter('%Y-%m-%d')
         plt.gca().xaxis.set_major_formatter(myFmt)
@@ -461,9 +455,7 @@ class Backtest:
         plt.gca().invert_yaxis()
         plt.show()
         
-
-        #override the data and result, and iterate through run and plot
-        results = []
+        stats_list = []
         for i in range(0, iter):
             data = data_split[i]
             if (not isinstance(data.index, pd.DatetimeIndex) and
@@ -510,37 +502,40 @@ class Backtest:
             exclusive_orders=self.s_exclusive_orders, index=data.index,
             )
 
-            results.append(self.runWalk(data))
+            
+            training_data = iter_data[i][0]
+            testing_data = iter_data[i][1]
+            self = Backtest(training_data, strategy=self._strategy)
             stats = self.optimize(
-                **kwargs,  # Possible values
-                maximize='Sharpe Ratio',  # Objective function to maximize
+                strategy_params_limit=strategy_params_limit, 
+                maximize='Sharpe Ratio', 
             )
-            # stats = self.optimize(
-            #     n1=range(5, 30, 5),  # Possible values for n1 are [5, 10, 15, ..., 30]
-            #     n2=range(10, 70, 10),  # Possible values for n2 are [10, 20, 30, ..., 70]
-            #     maximize='Sharpe Ratio',  # Objective function to maximize
-            #     constraint=lambda param: param.n1 < param.n2  # n1 should always be less than n2
-            # )
-            print("Walk Forward " + str(i+1))
-            print("Using parameters:" + str(self._strategy.n1))
-            print(results[i])
-            print("\n")
+            training_stats = stats.transpose()
+            stats_list.append(training_stats)
+            testing_stats = self.runWalk(testing_data).transpose()
+            stats_list.append(testing_stats)
             strategy_instance = stats['_strategy']
-            params_dict = strategy_instance.extract_params_from_str()
-            print(params_dict)
-            self._strategy.optimizeParams(self._strategy, **params_dict)
-            print("Optimization:"+str(stats['_strategy']))
-        #self.plotWF(resultsWF=results, data_wf=data_split)
+            current_param = strategy_instance._params
+            #print(stats['_strategy'])
+        pd.set_option('display.max_columns', None)
+        pd.set_option('display.width', 1000) 
+        pd.set_option('display.max_colwidth', None)
+        stats_df = pd.DataFrame(stats_list)
+        typeCol = ['Optimization' if i % 2 == 0 else 'Testing' for i in range(len(stats_df))]
+        stats_df.insert(2, "Type", typeCol)
+        print(stats_df)
         return None
     
-
+    #add flag for Walk-Backwards
     def runWF(self, iter, strategy_params_limit) -> pd.Series:
         if not strategy_params_limit:
             raise ValueError('Need some strategy parameters to optimize')
+        data = self._data.copy(deep=False)
+        if len(data.index) < (iter * 4):
+            raise ValueError('Need more historical data! (at least 4 per iteration)')
 
         split = 0.75
         bar = 4 + (iter - 1)
-
         data = self._data.copy(deep=False)
         total_points = len(data.index)
         iteration_points = int(total_points / bar)
@@ -548,6 +543,7 @@ class Backtest:
 
         data_split = []
         date_range = []
+        iter_data = []
         for i in range(0, iter):
             start = (iteration_points * i)
             end = start + (iteration_points * 4)
@@ -556,32 +552,27 @@ class Backtest:
             data_split.append(data.iloc[start:end])
             date_range.append(data.index[start].strftime('%Y-%m-%d'))
             date_range.append(data.index[end-1].strftime('%Y-%m-%d'))
-        example_dates = [datetime.datetime.strptime(date, '%Y-%m-%d') for date in date_range]
+            training = int((end - start) * split) + start
+            iter_data.append([data.iloc[start:training],data.iloc[training:end]])#this is where splitting training and testing
 
+        
         plt.figure(figsize=(12, 6))
-        # Create horizontal bars
         for i in range(0, len(example_dates), 2):
-            # Calculate the width of the blue and red parts
             width_total = example_dates[i+1] - example_dates[i]
             width_blue = width_total * (split)
             width_red = width_total * (1-split)
-            
-            # Blue part
             plt.barh('Iteration {}'.format(i//2 + 1),
                     left=example_dates[i],
                     width=width_blue,
                     height=1,
                     color='skyblue',
                     edgecolor='skyblue')
-            
-            # Red part
             plt.barh('Iteration {}'.format(i//2 + 1),
                     left=example_dates[i] + width_blue,
                     width=width_red,
                     height=1,
                     color='pink',
                     edgecolor='pink')
-        # x-labels
         plt.gcf().autofmt_xdate()
         myFmt = mdates.DateFormatter('%Y-%m-%d')
         plt.gca().xaxis.set_major_formatter(myFmt)
@@ -591,24 +582,32 @@ class Backtest:
         plt.gca().invert_yaxis()
         plt.show()
 
-        #override the data and result, and iterate through run and plot
-        results = []
+        stats_list = []
         current_param = None
         for i in range(0, iter):
-            data = data_split[i]
-            results.append(self.runWalk(data))
+            training_data = iter_data[i][0] #training data (75%)
+            testing_data = iter_data[i][1] #testing data (25%)
+            #training part first 75%
+            self = Backtest(training_data, strategy=self._strategy)
             stats = self.optimize(
-                strategy_params_limit=strategy_params_limit,  # Possible values
-                maximize='Sharpe Ratio',  # Objective function to maximize
+                strategy_params_limit=strategy_params_limit, 
+                maximize='Sharpe Ratio', 
             )
-            print("Walk Forward " + str(i + 1))
-            print("Using parameters:" + str(self._strategy.n1)) # TODO: What is this?
-            print(results[i])
-            print("\n")
+            training_stats = stats.transpose()
+            stats_list.append(training_stats)
+            #testing part last 25%
+            testing_stats = self.runWalk(testing_data).transpose()
+            stats_list.append(testing_stats)
             strategy_instance = stats['_strategy']
             current_param = strategy_instance._params
-            print("Optimization: " + str(stats['_strategy']))
-        #self.plotWF(resultsWF=results, data_wf=data_split)
+            #print(stats['_strategy'])
+        pd.set_option('display.max_columns', None)
+        pd.set_option('display.width', 1000) 
+        pd.set_option('display.max_colwidth', None)
+        stats_df = pd.DataFrame(stats_list)
+        typeCol = ['Optimization' if i % 2 == 0 else 'Testing' for i in range(len(stats_df))]
+        stats_df.insert(2, "Type", typeCol)
+        print(stats_df)
         return None
     
     def runWalk(self, data) -> pd.Series:
