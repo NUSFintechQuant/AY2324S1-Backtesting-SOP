@@ -554,7 +554,6 @@ class Backtest:
             date_range.append(data.index[end-1].strftime('%Y-%m-%d'))
             training = int((end - start) * split) + start
             iter_data.append([data.iloc[start:training],data.iloc[training:end]])#this is where splitting training and testing
-        example_dates = [datetime.datetime.strptime(date, '%Y-%m-%d') for date in date_range]
 
         
         plt.figure(figsize=(12, 6))
