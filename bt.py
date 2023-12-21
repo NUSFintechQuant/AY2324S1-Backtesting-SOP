@@ -10,6 +10,7 @@ from math import copysign
 from numpy.random import default_rng
 from bokeh.layouts import column
 from bokeh.io import output_file, save
+import random
 
 import re
 import multiprocessing as mp
@@ -21,6 +22,8 @@ import sys
 import warnings
 import numpy as np
 import pandas as pd
+# import utils.py
+# from _genetic_algorithm import GeneticAlgorithm
 
 try:
     from tqdm.auto import tqdm as _tqdm
@@ -60,9 +63,6 @@ class Strategy(metaclass=ABCMeta):
         if params:
             params = '(' + params + ')'
         return f'{self.__class__.__name__}{params}'
-    
-    def extract_params_from_str(self):
-        return self._params
 
     def _check_params(self, params):
         for k, v in params.items():
@@ -188,12 +188,6 @@ class Strategy(metaclass=ABCMeta):
 
             super().next()
         """
-    
-    @abstractmethod
-    def optimizeParams(self, **kwargs):
-        """
-        OVERRIDE THIS FOR WALK FORWARD OPTIMIZATION**
-        """
 
     class __FULL_EQUITY(float):  # noqa: N801
         def __repr__(self): return '.9999'
@@ -244,6 +238,31 @@ class Strategy(metaclass=ABCMeta):
 
     @property
     def data(self) -> _Data:
+        """
+        Price data, roughly as passed into
+        `backtesting.backtesting.Backtest.__init__`,
+        but with two significant exceptions:
+
+        * `data` is _not_ a DataFrame, but a custom structure
+          that serves customized numpy arrays for reasons of performance
+          and convenience. Besides OHLCV columns, `.index` and length,
+          it offers `.pip` property, the smallest price unit of change.
+        * Within `backtesting.backtesting.Strategy.init`, `data` arrays
+          are available in full length, as passed into
+          `backtesting.backtesting.Backtest.__init__`
+          (for precomputing indicators and such). However, within
+          `backtesting.backtesting.Strategy.next`, `data` arrays are
+          only as long as the current iteration, simulating gradual
+          price point revelation. In each call of
+          `backtesting.backtesting.Strategy.next` (iteratively called by
+          `backtesting.backtesting.Backtest` internally),
+          the last array value (e.g. `data.Close[-1]`)
+          is always the _most recent_ value.
+        * If you need data arrays (e.g. `data.Close`) to be indexed
+          **Pandas series**, you can call their `.s` accessor
+          (e.g. `data.Close.s`). If you need the whole of data
+          as a **DataFrame**, use `.df` accessor (i.e. `data.df`).
+        """
         return self._data
 
     @property
@@ -266,6 +285,25 @@ class Strategy(metaclass=ABCMeta):
         """List of settled trades (see `Trade`)."""
         return tuple(self._broker.closed_trades)
 
+class _Orders(tuple):
+    """
+    TODO: remove this class. Only for deprecation.
+    """
+    def cancel(self):
+        """Cancel all non-contingent (i.e. SL/TP) orders."""
+        for order in self:
+            if not order.is_contingent:
+                order.cancel()
+
+    def __getattr__(self, item):
+        # TODO: Warn on deprecations from the previous version. Remove in the next.
+        removed_attrs = ('entry', 'set_entry', 'is_long', 'is_short',
+                         'sl', 'tp', 'set_sl', 'set_tp')
+        if item in removed_attrs:
+            raise AttributeError(f'Strategy.orders.{"/.".join(removed_attrs)} were removed in'
+                                 'Backtesting 0.2.0. '
+                                 'Use `Order` API instead. See docs.')
+        raise AttributeError(f"'tuple' object has no attribute {item!r}")
 
 class Backtest:
     """
@@ -284,17 +322,18 @@ class Backtest:
     s_hedging = 0
     s_exclusive_orders = 0
 
-    def __init__(self,
-                 data: pd.DataFrame,
-                 strategy: Type[Strategy],
-                 *,
-                 cash: float = 10_000,
-                 commission: float = .0,
-                 margin: float = 1.,
-                 trade_on_close=False,
-                 hedging=False,
-                 exclusive_orders=False
-                 ):
+    def __init__(
+        self,
+        data: pd.DataFrame,
+        strategy: Type[Strategy],
+        *,
+        cash: float = 10_000,
+        commission: float = .0,
+        margin: float = 1.,
+        trade_on_close=False,
+        hedging=False,
+        exclusive_orders=False
+    ):
 
         if not (isinstance(strategy, type) and issubclass(strategy, Strategy)):
             raise TypeError('`strategy` must be a Strategy sub-type')
@@ -359,8 +398,8 @@ class Backtest:
         self._strategy = strategy
         self._results: Optional[pd.Series] = None
 
-    def runAWF(self, iter, **kwargs) -> pd.Series:
-        if not kwargs:
+    def runAWF(self, iter, strategy_params_limit) -> pd.Series:
+        if not strategy_params_limit:
             raise ValueError('Need some strategy parameters to optimize')
 
         bar = 4 + (iter - 1)
@@ -372,47 +411,41 @@ class Backtest:
 
         data_split = []
         date_range = []
+        iter_data = []
         anchored_test = 0
         for i in range(0, iter):
                 start = (iteration_points * 0)
                 end = (iteration_points * (4 + i))
                 if i == 0:
-                    anchored_test = end * 0.25
+                    anchored_test = int(end * 0.25)
                 if i == (iter):
                     end += left_over_points
                 data_split.append(data.iloc[start:end])
                 date_range.append(data.index[start].strftime('%Y-%m-%d'))
                 date_range.append(data.index[end-1].strftime('%Y-%m-%d'))
+                iter_data.append([data.iloc[0:end-anchored_test],data.iloc[end-anchored_test:end]])
         example_dates = [datetime.datetime.strptime(date, '%Y-%m-%d') for date in date_range]
 
         plt.figure(figsize=(12, 6))
         bob = 0
-        # Create horizontal bars
         for i in range(0, len(example_dates), 2):
-            
-            # Calculate the width of the blue and red parts
             width_total = example_dates[i+1] - example_dates[0]
             split = (len(data_split[bob])-anchored_test)/len(data_split[bob])
             width_blue = width_total * (split)
             width_red = width_total * (1-split)
             bob+=1
-            
-            # Blue part
             plt.barh('Iteration {}'.format(i//2 + 1),
                     left=example_dates[i],
                     width=width_blue,
                     height=1,
                     color='skyblue',
                     edgecolor='skyblue')
-            
-            # Red part
             plt.barh('Iteration {}'.format(i//2 + 1),
                     left=example_dates[i] + width_blue,
                     width=width_red,
                     height=1,
                     color='pink',
                     edgecolor='pink')
-        # x-labels
         plt.gcf().autofmt_xdate()
         myFmt = mdates.DateFormatter('%Y-%m-%d')
         plt.gca().xaxis.set_major_formatter(myFmt)
@@ -422,9 +455,7 @@ class Backtest:
         plt.gca().invert_yaxis()
         plt.show()
         
-
-        #override the data and result, and iterate through run and plot
-        results = []
+        stats_list = []
         for i in range(0, iter):
             data = data_split[i]
             if (not isinstance(data.index, pd.DatetimeIndex) and
@@ -471,37 +502,40 @@ class Backtest:
             exclusive_orders=self.s_exclusive_orders, index=data.index,
             )
 
-            results.append(self.runWalk(data))
+            
+            training_data = iter_data[i][0]
+            testing_data = iter_data[i][1]
+            self = Backtest(training_data, strategy=self._strategy)
             stats = self.optimize(
-                **kwargs,  # Possible values
-                maximize='Sharpe Ratio',  # Objective function to maximize
+                strategy_params_limit=strategy_params_limit, 
+                maximize='Sharpe Ratio', 
             )
-            # stats = self.optimize(
-            #     n1=range(5, 30, 5),  # Possible values for n1 are [5, 10, 15, ..., 30]
-            #     n2=range(10, 70, 10),  # Possible values for n2 are [10, 20, 30, ..., 70]
-            #     maximize='Sharpe Ratio',  # Objective function to maximize
-            #     constraint=lambda param: param.n1 < param.n2  # n1 should always be less than n2
-            # )
-            print("Walk Forward " + str(i+1))
-            print("Using parameters:" + str(self._strategy.n1))
-            print(results[i])
-            print("\n")
+            training_stats = stats.transpose()
+            stats_list.append(training_stats)
+            testing_stats = self.runWalk(testing_data).transpose()
+            stats_list.append(testing_stats)
             strategy_instance = stats['_strategy']
-            params_dict = strategy_instance.extract_params_from_str()
-            print(params_dict)
-            self._strategy.optimizeParams(self._strategy, **params_dict)
-            print("Optimization:"+str(stats['_strategy']))
-        #self.plotWF(resultsWF=results, data_wf=data_split)
+            current_param = strategy_instance._params
+            #print(stats['_strategy'])
+        pd.set_option('display.max_columns', None)
+        pd.set_option('display.width', 1000) 
+        pd.set_option('display.max_colwidth', None)
+        stats_df = pd.DataFrame(stats_list)
+        typeCol = ['Optimization' if i % 2 == 0 else 'Testing' for i in range(len(stats_df))]
+        stats_df.insert(2, "Type", typeCol)
+        print(stats_df)
         return None
     
-
-    def runWF(self, iter, **kwargs) -> pd.Series:
-        if not kwargs:
+    #add flag for Walk-Backwards
+    def runWF(self, iter, strategy_params_limit) -> pd.Series:
+        if not strategy_params_limit:
             raise ValueError('Need some strategy parameters to optimize')
+        data = self._data.copy(deep=False)
+        if len(data.index) < (iter * 4):
+            raise ValueError('Need more historical data! (at least 4 per iteration)')
 
         split = 0.75
         bar = 4 + (iter - 1)
-
         data = self._data.copy(deep=False)
         total_points = len(data.index)
         iteration_points = int(total_points / bar)
@@ -509,41 +543,36 @@ class Backtest:
 
         data_split = []
         date_range = []
+        iter_data = []
         for i in range(0, iter):
-                start = (iteration_points * i)
-                end = start + (iteration_points * 4)
-                if i == (iter):
-                    end += left_over_points
-                data_split.append(data.iloc[start:end])
-                date_range.append(data.index[start].strftime('%Y-%m-%d'))
-                date_range.append(data.index[end-1].strftime('%Y-%m-%d'))
-        example_dates = [datetime.datetime.strptime(date, '%Y-%m-%d') for date in date_range]
+            start = (iteration_points * i)
+            end = start + (iteration_points * 4)
+            if i == (iter):
+                end += left_over_points
+            data_split.append(data.iloc[start:end])
+            date_range.append(data.index[start].strftime('%Y-%m-%d'))
+            date_range.append(data.index[end-1].strftime('%Y-%m-%d'))
+            training = int((end - start) * split) + start
+            iter_data.append([data.iloc[start:training],data.iloc[training:end]])#this is where splitting training and testing
 
+        
         plt.figure(figsize=(12, 6))
-        # Create horizontal bars
         for i in range(0, len(example_dates), 2):
-            
-            # Calculate the width of the blue and red parts
             width_total = example_dates[i+1] - example_dates[i]
             width_blue = width_total * (split)
             width_red = width_total * (1-split)
-            
-            # Blue part
             plt.barh('Iteration {}'.format(i//2 + 1),
                     left=example_dates[i],
                     width=width_blue,
                     height=1,
                     color='skyblue',
                     edgecolor='skyblue')
-            
-            # Red part
             plt.barh('Iteration {}'.format(i//2 + 1),
                     left=example_dates[i] + width_blue,
                     width=width_red,
                     height=1,
                     color='pink',
                     edgecolor='pink')
-        # x-labels
         plt.gcf().autofmt_xdate()
         myFmt = mdates.DateFormatter('%Y-%m-%d')
         plt.gca().xaxis.set_major_formatter(myFmt)
@@ -552,133 +581,38 @@ class Backtest:
         plt.title('Walk Forward Backtesting Iterations')
         plt.gca().invert_yaxis()
         plt.show()
-        
 
-        #override the data and result, and iterate through run and plot
-        results = []
+        stats_list = []
+        current_param = None
         for i in range(0, iter):
-            data = data_split[i]
-            if (not isinstance(data.index, pd.DatetimeIndex) and
-            not isinstance(data.index, pd.RangeIndex) and
-            # Numeric index with most large numbers
-            (data.index.is_numeric() and
-             (data.index > pd.Timestamp('1975').timestamp()).mean() > .8)):
-            
-                try:
-                    data.index = pd.to_datetime(data.index, infer_datetime_format=True)
-                except ValueError:
-                    pass
-
-            if 'Volume' not in data:
-                data['Volume'] = np.nan
-
-            if len(data) == 0:
-                raise ValueError('OHLC `data` is empty')
-            if len(data.columns.intersection({'Open', 'High', 'Low', 'Close', 'Volume'})) != 5:
-                raise ValueError("`data` must be a pandas.DataFrame with columns "
-                                "'Open', 'High', 'Low', 'Close', and (optionally) 'Volume'")
-            if data[['Open', 'High', 'Low', 'Close']].isnull().values.any():
-                raise ValueError('Some OHLC values are missing (NaN). '
-                                'Please strip those lines with `df.dropna()` or '
-                                'fill them in with `df.interpolate()` or whatever.')
-            if np.any(data['Close'] > self.s_cash):
-                warnings.warn('Some prices are larger than initial cash value. Note that fractional '
-                            'trading is not supported. If you want to trade Bitcoin, '
-                            'increase initial cash, or trade μBTC or satoshis instead (GH-134).',
-                            stacklevel=2)
-            if not data.index.is_monotonic_increasing:
-                warnings.warn('Data index is not sorted in ascending order. Sorting.',
-                            stacklevel=2)
-                data = data.sort_index()
-            if not isinstance(data.index, pd.DatetimeIndex):
-                warnings.warn('Data index is not datetime. Assuming simple periods, '
-                            'but `pd.DateTimeIndex` is advised.',
-                            stacklevel=2)
-
-            self._data: pd.DataFrame = data
-            self._broker = partial(
-            _Broker, cash=self.s_cash, commission=self.s_commission, margin=self.s_margin,
-            trade_on_close=self.s_trade_on_close, hedging=self.s_hedging,
-            exclusive_orders=self.s_exclusive_orders, index=data.index,
-            )
-
-            results.append(self.runWalk(data))
+            training_data = iter_data[i][0] #training data (75%)
+            testing_data = iter_data[i][1] #testing data (25%)
+            #training part first 75%
+            self = Backtest(training_data, strategy=self._strategy)
             stats = self.optimize(
-                **kwargs,  # Possible values
-                maximize='Sharpe Ratio',  # Objective function to maximize
+                strategy_params_limit=strategy_params_limit, 
+                maximize='Sharpe Ratio', 
             )
-            print("Walk Forward " + str(i+1))
-            print("Using parameters:" + str(self._strategy.n1))
-            print(results[i])
-            print("\n")
+            training_stats = stats.transpose()
+            stats_list.append(training_stats)
+            #testing part last 25%
+            testing_stats = self.runWalk(testing_data).transpose()
+            stats_list.append(testing_stats)
             strategy_instance = stats['_strategy']
-            params_dict = strategy_instance.extract_params_from_str()
-            print(params_dict)
-            self._strategy.optimizeParams(self._strategy, **params_dict)
-            print("Optimization:"+str(stats['_strategy']))
-        #self.plotWF(resultsWF=results, data_wf=data_split)
+            current_param = strategy_instance._params
+            #print(stats['_strategy'])
+        pd.set_option('display.max_columns', None)
+        pd.set_option('display.width', 1000) 
+        pd.set_option('display.max_colwidth', None)
+        stats_df = pd.DataFrame(stats_list)
+        typeCol = ['Optimization' if i % 2 == 0 else 'Testing' for i in range(len(stats_df))]
+        stats_df.insert(2, "Type", typeCol)
+        print(stats_df)
         return None
     
-    def runWalk(self, walk_data, **kwargs) -> pd.Series:
-        data = _Data(self._data.copy(deep=False))
-        broker: _Broker = self._broker(data=data)
-        strategy: Strategy = self._strategy(broker, data, kwargs)
-
-        strategy.init()
-
-        # Indicators used in Strategy.next()
-        indicator_attrs = {attr: indicator
-                           for attr, indicator in strategy.__dict__.items()
-                           if isinstance(indicator, _Indicator)}.items()
-
-        # Skip first few candles where indicators are still "warming up"
-        # +1 to have at least two entries available
-        start = 1 + max((np.isnan(indicator.astype(float)).argmin(axis=-1).max()
-                         for _, indicator in indicator_attrs), default=0)
-
-        # Disable "invalid value encountered in ..." warnings. Comparison
-        # np.nan >= 3 is not invalid; it's False.
-        with np.errstate(invalid='ignore'):
-
-            for i in range(start, len(self._data)):
-                # Prepare data and indicators for `next` call
-                data._set_length(i + 1)
-                for attr, indicator in indicator_attrs:
-                    # Slice indicator on the last dimension (case of 2d indicator)
-                    setattr(strategy, attr, indicator[..., :i + 1])
-
-                # Handle orders processing and broker stuff
-                try:
-                    broker.next()
-                except _OutOfMoneyError:
-                    break
-
-                # Next tick, a moment before bar close
-                strategy.next()
-            else:
-                # Close any remaining open trades so they produce some stats
-                for trade in broker.trades:
-                    trade.close()
-
-                # Re-run broker one last time to handle orders placed in the last strategy
-                # iteration. Use the same OHLC values as in the last broker iteration.
-                if start < len(self._data):
-                    try_(broker.next, exception=_OutOfMoneyError)
-
-            # Set data back to full length
-            # for future `indicator._opts['data'].index` calls to work
-            data._set_length(len(self._data))
-
-            equity = pd.Series(broker._equity).bfill().fillna(broker._cash).values
-            self._results = compute_stats(
-                trades=broker.closed_trades,
-                equity=equity,
-                ohlc_data=self._data,
-                risk_free_rate=0.0,
-                strategy_instance=strategy,
-            )
-
-        return self._results
+    def runWalk(self, data) -> pd.Series:
+        bt = Backtest(data, strategy=self._strategy)
+        return bt.run()
 
     def run(self, **kwargs) -> pd.Series:
         data = _Data(self._data.copy(deep=False))
@@ -742,242 +676,66 @@ class Backtest:
 
         return self._results
 
-    def optimize(self, *,
-                 maximize: Union[str, Callable[[pd.Series], float]] = 'SQN',
-                 method: str = 'grid',
-                 max_tries: Optional[Union[int, float]] = None,
-                 constraint: Optional[Callable[[dict], bool]] = None,
-                 return_heatmap: bool = False,
-                 return_optimization: bool = False,
-                 random_state: Optional[int] = None,
-                 **kwargs) -> Union[pd.Series,
-                                    Tuple[pd.Series, pd.Series],
-                                    Tuple[pd.Series, pd.Series, dict]]:
-        if not kwargs:
+    def optimize(
+        self, *,
+        maximize: Union[str, Callable[[pd.Series], float]] = 'SQN',
+        method: str = 'grid',
+        strategy_params_limit: Dict[str, Union[List[int], List[float]]] = None,
+        return_optimization: bool = False,
+        random_state: Optional[int] = None,
+    ) -> Union[
+        pd.Series,
+        Tuple[pd.Series, pd.Series],
+        Tuple[pd.Series, pd.Series, dict]
+    ]:
+
+        if not strategy_params_limit:
             raise ValueError('Need some strategy parameters to optimize')
+        # maximize_key = None
+        # if isinstance(maximize, str):
+        #     maximize_key = str(maximize)
+        #     stats = self._results if self._results is not None else self.run()
+        #     if maximize not in stats:
+        #         raise ValueError('`maximize`, if str, must match a key in pd.Series '
+        #                          'result of backtest.run()')
 
-        maximize_key = None
-        if isinstance(maximize, str):
-            maximize_key = str(maximize)
-            stats = self._results if self._results is not None else self.run()
-            if maximize not in stats:
-                raise ValueError('`maximize`, if str, must match a key in pd.Series '
-                                 'result of backtest.run()')
+        #     def maximize(stats: pd.Series, _key=maximize):
+        #         return stats[_key]
 
-            def maximize(stats: pd.Series, _key=maximize):
-                return stats[_key]
+        # elif not callable(maximize):
+        #     raise TypeError('`maximize` must be str (a field of backtest.run() result '
+        #                     'Series) or a function that accepts result Series '
+        #                     'and returns a number; the higher the better')
+        # assert callable(maximize), maximize
 
-        elif not callable(maximize):
-            raise TypeError('`maximize` must be str (a field of backtest.run() result '
-                            'Series) or a function that accepts result Series '
-                            'and returns a number; the higher the better')
-        assert callable(maximize), maximize
+        # have_constraint = bool(constraint)
+        # if constraint is None:
 
-        have_constraint = bool(constraint)
-        if constraint is None:
+        #     def constraint(_):
+        #         return True
 
-            def constraint(_):
-                return True
+        # elif not callable(constraint):
+        #     raise TypeError("`constraint` must be a function that accepts a dict "
+        #                     "of strategy parameters and returns a bool whether "
+        #                     "the combination of parameters is admissible or not")
+        # assert callable(constraint), constraint
 
-        elif not callable(constraint):
-            raise TypeError("`constraint` must be a function that accepts a dict "
-                            "of strategy parameters and returns a bool whether "
-                            "the combination of parameters is admissible or not")
-        assert callable(constraint), constraint
+        # if return_optimization and method != 'skopt':
+        #     raise ValueError("return_optimization=True only valid if method='skopt'")
 
-        if return_optimization and method != 'skopt':
-            raise ValueError("return_optimization=True only valid if method='skopt'")
+        # def _tuple(x):
+        #     return x if isinstance(x, Sequence) and not isinstance(x, str) else (x,)
 
-        def _tuple(x):
-            return x if isinstance(x, Sequence) and not isinstance(x, str) else (x,)
+        # for k, v in kwargs.items():
+        #     if len(_tuple(v)) == 0:
+        #         raise ValueError(f"Optimization variable '{k}' is passed no "
+        #                          f"optimization values: {k}={v}")
 
-        for k, v in kwargs.items():
-            if len(_tuple(v)) == 0:
-                raise ValueError(f"Optimization variable '{k}' is passed no "
-                                 f"optimization values: {k}={v}")
-
-        class AttrDict(dict):
-            def __getattr__(self, item):
-                return self[item]
-
-        def _grid_size():
-            size = int(np.prod([len(_tuple(v)) for v in kwargs.values()]))
-            if size < 10_000 and have_constraint:
-                size = sum(1 for p in product(*(zip(repeat(k), _tuple(v))
-                                                for k, v in kwargs.items()))
-                           if constraint(AttrDict(p)))
-            return size
-
-        def _optimize_grid() -> Union[pd.Series, Tuple[pd.Series, pd.Series]]:
-            rand = default_rng(random_state).random
-            grid_frac = (1 if max_tries is None else
-                         max_tries if 0 < max_tries <= 1 else
-                         max_tries / _grid_size())
-            param_combos = [dict(params)  # back to dict so it pickles
-                            for params in (AttrDict(params)
-                                           for params in product(*(zip(repeat(k), _tuple(v))
-                                                                   for k, v in kwargs.items())))
-                            if constraint(params)  # type: ignore
-                            and rand() <= grid_frac]
-            if not param_combos:
-                raise ValueError('No admissible parameter combinations to test')
-
-            if len(param_combos) > 300:
-                warnings.warn(f'Searching for best of {len(param_combos)} configurations.',
-                              stacklevel=2)
-
-            heatmap = pd.Series(np.nan,
-                                name=maximize_key,
-                                index=pd.MultiIndex.from_tuples(
-                                    [p.values() for p in param_combos],
-                                    names=next(iter(param_combos)).keys()))
-
-            def _batch(seq):
-                n = np.clip(int(len(seq) // (os.cpu_count() or 1)), 1, 300)
-                for i in range(0, len(seq), n):
-                    yield seq[i:i + n]
-
-            # Save necessary objects into "global" state; pass into concurrent executor
-            # (and thus pickle) nothing but two numbers; receive nothing but numbers.
-            # With start method "fork", children processes will inherit parent address space
-            # in a copy-on-write manner, achieving better performance/RAM benefit.
-            backtest_uuid = np.random.random()
-            param_batches = list(_batch(param_combos))
-            Backtest._mp_backtests[backtest_uuid] = (self, param_batches, maximize)  # type: ignore
-            try:
-                # If multiprocessing start method is 'fork' (i.e. on POSIX), use
-                # a pool of processes to compute results in parallel.
-                # Otherwise (i.e. on Windos), sequential computation will be "faster".
-                if mp.get_start_method(allow_none=False) == 'fork':
-                    with ProcessPoolExecutor() as executor:
-                        futures = [executor.submit(Backtest._mp_task, backtest_uuid, i)
-                                   for i in range(len(param_batches))]
-                        for future in _tqdm(as_completed(futures), total=len(futures),
-                                            desc='Backtest.optimize'):
-                            batch_index, values = future.result()
-                            for value, params in zip(values, param_batches[batch_index]):
-                                heatmap[tuple(params.values())] = value
-                else:
-                    if os.name == 'posix':
-                        warnings.warn("For multiprocessing support in `Backtest.optimize()` "
-                                      "set multiprocessing start method to 'fork'.")
-                    for batch_index in _tqdm(range(len(param_batches))):
-                        _, values = Backtest._mp_task(backtest_uuid, batch_index)
-                        for value, params in zip(values, param_batches[batch_index]):
-                            heatmap[tuple(params.values())] = value
-            finally:
-                del Backtest._mp_backtests[backtest_uuid]
-
-            best_params = heatmap.idxmax()
-
-            if pd.isnull(best_params):
-                # No trade was made in any of the runs. Just make a random
-                # run so we get some, if empty, results
-                stats = self.run(**param_combos[0])
-            else:
-                stats = self.run(**dict(zip(heatmap.index.names, best_params)))
-
-            if return_heatmap:
-                return stats, heatmap
-            return stats
-
-        def _optimize_skopt() -> Union[pd.Series,
-                                       Tuple[pd.Series, pd.Series],
-                                       Tuple[pd.Series, pd.Series, dict]]:
-            try:
-                from skopt import forest_minimize
-                from skopt.callbacks import DeltaXStopper
-                from skopt.learning import ExtraTreesRegressor
-                from skopt.space import Categorical, Integer, Real
-                from skopt.utils import use_named_args
-            except ImportError:
-                raise ImportError("Need package 'scikit-optimize' for method='skopt'. "
-                                  "pip install scikit-optimize") from None
-
-            nonlocal max_tries
-            max_tries = (200 if max_tries is None else
-                         max(1, int(max_tries * _grid_size())) if 0 < max_tries <= 1 else
-                         max_tries)
-
-            dimensions = []
-            for key, values in kwargs.items():
-                values = np.asarray(values)
-                if values.dtype.kind in 'mM':  # timedelta, datetime64
-                    # these dtypes are unsupported in skopt, so convert to raw int
-                    # TODO: save dtype and convert back later
-                    values = values.astype(int)
-
-                if values.dtype.kind in 'iumM':
-                    dimensions.append(Integer(low=values.min(), high=values.max(), name=key))
-                elif values.dtype.kind == 'f':
-                    dimensions.append(Real(low=values.min(), high=values.max(), name=key))
-                else:
-                    dimensions.append(Categorical(values.tolist(), name=key, transform='onehot'))
-
-            # Avoid recomputing re-evaluations:
-            # "The objective has been evaluated at this point before."
-            # https://github.com/scikit-optimize/scikit-optimize/issues/302
-            memoized_run = lru_cache()(lambda tup: self.run(**dict(tup)))
-
-            # np.inf/np.nan breaks sklearn, np.finfo(float).max breaks skopt.plots.plot_objective
-            INVALID = 1e300
-            progress = iter(_tqdm(repeat(None), total=max_tries, desc='Backtest.optimize'))
-
-            @use_named_args(dimensions=dimensions)
-            def objective_function(**params):
-                next(progress)
-                # Check constraints
-                # TODO: Adjust after https://github.com/scikit-optimize/scikit-optimize/pull/971
-                if not constraint(AttrDict(params)):
-                    return INVALID
-                res = memoized_run(tuple(params.items()))
-                value = -maximize(res)
-                if np.isnan(value):
-                    return INVALID
-                return value
-
-            with warnings.catch_warnings():
-                warnings.filterwarnings(
-                    'ignore', 'The objective has been evaluated at this point before.')
-
-                res = forest_minimize(
-                    func=objective_function,
-                    dimensions=dimensions,
-                    n_calls=max_tries,
-                    base_estimator=ExtraTreesRegressor(n_estimators=20, min_samples_leaf=2),
-                    acq_func='LCB',
-                    kappa=3,
-                    n_initial_points=min(max_tries, 20 + 3 * len(kwargs)),
-                    initial_point_generator='lhs',  # 'sobel' requires n_initial_points ~ 2**N
-                    callback=DeltaXStopper(9e-7),
-                    random_state=random_state)
-
-            stats = self.run(**dict(zip(kwargs.keys(), res.x)))
-            output = [stats]
-
-            if return_heatmap:
-                heatmap = pd.Series(dict(zip(map(tuple, res.x_iters), -res.func_vals)),
-                                    name=maximize_key)
-                heatmap.index.names = kwargs.keys()
-                heatmap = heatmap[heatmap != -INVALID]
-                heatmap.sort_index(inplace=True)
-                output.append(heatmap)
-
-            if return_optimization:
-                valid = res.func_vals != INVALID
-                res.x_iters = list(compress(res.x_iters, valid))
-                res.func_vals = res.func_vals[valid]
-                output.append(res)
-
-            return stats if len(output) == 1 else tuple(output)
-
-        if method == 'grid':
-            output = _optimize_grid()
-        elif method == 'skopt':
-            output = _optimize_skopt()
-        else:
-            raise ValueError(f"Method should be 'grid' or 'skopt', not {method!r}")
-        return output
+        def _optimize_genetic_algorithm():
+            best_params = GeneticAlgorithm(strategy_params_limit).optimise(self)
+            return self.run(**best_params)
+        
+        return _optimize_genetic_algorithm()
 
     @staticmethod
     def _mp_task(backtest_uuid, batch_index):
@@ -1064,13 +822,104 @@ class Backtest:
 
         plot_objects = []
         
-    
         for resulter, data in zip(resultsWF, data_wf):
             p = self.plotOne(results=resulter, data_wf=data)
             plot_objects.append(p)
         output_file("combined_WF_plots.html")
         layout = column(*plot_objects)  # Arrange plots vertically. Use gridplot for more complex layouts.
         save(layout)
+        
+    def event_bias_analysis(self):
+        # mock data
+        self.data[0] = pd.DataFrame({
+            'Date': pd.date_range(start='2020-01-01', periods=365, freq='D'),
+            'Close': np.cumsum(np.random.normal(0, 1, 365)) + 100  # Starting price at 100
+        })
+        vix_data = pd.DataFrame({
+            'Date': pd.date_range(start='2020-01-01', periods=365, freq='D'),
+            'Close': np.cumsum(np.random.normal(0, 1, 365)) + 20  # Starting price at 20
+        })
+        # trade_data = pd.DataFrame({
+        #     'Date': pd.date_range(start='2020-01-01', periods=365, freq='D'),
+        #     'Returns': np.random.normal(-1, 1, 365)
+        # })
+
+        try:
+            self.local_outlier_factor()
+            self.vix_rsi(vix_data)
+            #self.outlier_analysis(trade_data) # to confirm how the trade_data is passed
+            #print(self.data[0])
+        except Exception as e:
+            print(e)
+
+    def outlier_analysis(self, trade_data, visualise = False):
+        """ Removes outliers from trade data """
+        # Calculate squared differences of returns from the mean, quartiles and IQR for the squared differences
+        trade_data['Squared_Diff'] = (trade_data['Returns'] - trade_data['Returns'].mean()) ** 2
+        Q1 = trade_data['Squared_Diff'].quantile(0.25)
+        Q3 = trade_data['Squared_Diff'].quantile(0.75)
+        IQR = Q3 - Q1
+
+        # Define potential outliers based on thresholds
+        threshold_iqr = 3 * IQR
+        threshold_top_percentile = trade_data['Squared_Diff'].quantile(0.90)
+
+        # Identify outliers based on the IQR criterion and top percentile criterion
+        outliers_iqr = trade_data[(trade_data['Squared_Diff'] - trade_data['Squared_Diff'].mean()).abs() > threshold_iqr]
+        outliers_top_percentile = trade_data[trade_data['Squared_Diff'] > threshold_top_percentile]
+        if visualise:
+            plt.figure(figsize=(12, 6))
+            plt.plot(trade_data['Date'], trade_data['Squared_Diff'], label='Squared Differences', color='b')
+            plt.scatter(outliers_top_percentile['Date'], outliers_top_percentile['Squared_Diff'], label='Outliers (Top Percentile)', color='g', marker='o')
+            plt.scatter(outliers_iqr['Date'], outliers_iqr['Squared_Diff'], label='Outliers (IQR)', color='r', marker='x')
+            plt.xlabel('Date')
+            plt.ylabel('Squared Differences')
+            plt.title('Outlier Analysis of Squared Differences')
+            plt.legend()
+            plt.show()
+
+        # Remove identified outliers
+        drop_indices = set(outliers_iqr.index.tolist() + outliers_top_percentile.index.tolist())
+        trade_data = trade_data.drop(drop_indices)
+
+    def local_outlier_factor(self, visualise = False):
+        """ Removes outliers from price data via LOF """
+        # pct change and mvg of quarter
+        p_data = self.data[0]
+        p_data['P_Change'] = p_data['Close'].pct_change() * 100
+        p_data['MA64'] =  p_data['P_Change'].rolling(window=64).mean()
+        p_data['Sq_Diff'] = abs(p_data['P_Change'] - p_data['MA64'])
+        p_data = p_data.dropna()
+
+        features = p_data[['P_Change', 'Sq_Diff']]
+        lof = LocalOutlierFactor(n_neighbors=20)
+        lof_scores = lof.fit_predict(features)
+
+        # Create a Series of outlier labels (-1 for outliers, 1 for inliers)
+        labels = pd.Series(lof_scores, index=p_data.index)
+        inliers = ((abs(p_data['P_Change']) < 2) & (labels == 1))
+        if visualise:
+            plt.figure(figsize=(12, 6))
+            plt.scatter(p_data['Date'], p_data['Close'], c=inliers, cmap='coolwarm', s=30)
+            plt.xlabel('Date')
+            plt.ylabel('Close Price')
+            plt.title('Outlier Detection using LOF')
+            plt.colorbar(label='Outlier Score')
+            plt.show()
+
+        # Remove identified outliers
+        self.data[0] = p_data[inliers]
+
+    def vix_rsi(self, vix_data, overbought_threshold=70, oversold_threshold=30, rsi_window=14):
+        """ Removes outliers from price data via VIX RSI """
+        # Calculate RSI for the VIX data using ta library
+        p_data = self.data[0]
+        vix_data['VIX_RSI'] = RSIIndicator(close=vix_data['Close'], window=rsi_window).rsi()
+        vix_data.drop('Close', axis=1, inplace=True)
+
+        # Merge both price and vix data, then filter based on thresholds
+        p_data = pd.merge(p_data, vix_data, on='Date', how='inner')
+        self.data[0] = p_data[(p_data['VIX_RSI'] <= overbought_threshold) & (p_data['VIX_RSI'] >= oversold_threshold)]
 
 
 class Order:
@@ -1774,3 +1623,106 @@ class _Broker:
 
 class _OutOfMoneyError(Exception):
     pass
+
+class GeneticAlgorithm:
+    population_size = 10
+    
+    def __init__(self, genome_sample: dict) -> None:
+        self.genome_sample = genome_sample
+    
+    def create_population(self, population_size):
+        """ Create population of strategy parameters """
+        return [self.generate_genome() for _ in range(population_size)]
+    
+    def generate_genome(self):
+        """ Generates strategy parameters """
+        genome = []
+        for param in list(self.genome_sample.keys()):
+            min_val, max_val = self.genome_sample[param]
+            param_value = self.generate_randint(min_val, max_val)
+            genome.append((param, param_value))
+        return genome
+    
+    def mutate(self, genome):
+        """ Mutates genome by randomly changing one parameter """
+        mutated_genome = genome.copy()
+        # Randomly select a parameter and mutate its value
+        param_index = random.randint(0, len(mutated_genome) - 1)
+        param_name, param_value = mutated_genome[param_index]
+        min_val, max_val = self.genome_sample[param_name]
+        mutated_value = self.generate_randint(min_val, max_val)
+        mutated_genome[param_index] = (param_name, mutated_value)
+        return mutated_genome
+
+    def breed(self, genome_a, genome_b):
+        """ Breeds offspring from two parent genomes """
+        child_genome = []
+        for (param_name_a, param_value_a), (param_name_b, param_value_b) in zip(genome_a, genome_b):
+            # Randomly choose parameter from parent A or B
+            child_param_name = param_name_a if random.random() < 0.5 else param_name_b
+            child_param_value = param_value_a if random.random() < 0.5 else param_value_b
+            child_genome.append((child_param_name, child_param_value))
+        return child_genome
+    
+    def calculate_fitness(self, backtest: Backtest, genome: [int]) -> int:
+        """ Evaluates the trading strategy """
+        params = {param_name: param_value for param_name, param_value in genome}
+        result = backtest.run(**params)
+        
+        # TODO do calculation with the stats for the fitness. Direction will be given by researcher
+        
+        return 1_000
+    
+    def optimise(self, backtest: Backtest) -> [int]:
+        """ Entry point to optimise backtest. Returns the best parameter genome """
+        # Example
+        TERMINATION_FITNESS_THRESHOLD = 10_000
+        MUTATION_RATE = 0.1
+
+        # LIMIT GENERATIONS
+        MAXIMUM_GENERATION = 10
+
+        # backtest.reset()
+        population = self.create_population(self.population_size)
+
+        found = False
+        generation = 0
+        while not found and generation < MAXIMUM_GENERATION:
+            # Calculate fitness for each genome in the population
+            fitness_scores = [self.calculate_fitness(backtest, genome) for genome in population]
+            # Find the index of the best genome in the population
+            best_genome_index = fitness_scores.index(max(fitness_scores))
+            best_genome = population[best_genome_index]
+        
+            # Check if the best genome satisfies the termination condition
+            if max(fitness_scores) >= TERMINATION_FITNESS_THRESHOLD:
+                found = True
+                break
+            
+            # Perform selection, crossover, and mutation to create new generation
+            new_generation = []
+            # Elitism: keep the best 10% of the population
+            elite_count = int(0.1 * self.population_size)
+            # Gets the indeces of the highest fitness scores
+            elites = sorted(range(len(fitness_scores)), key=lambda k: fitness_scores[k])[-elite_count:]
+
+            # Add elites to the new generation
+            new_generation.extend([population[i] for i in elites])
+            
+            for _ in range(self.population_size - elite_count):
+                parent_a = random.choice(population)
+                parent_b = random.choice(population)
+                child_genome = self.breed(parent_a, parent_b)
+                if random.random() < MUTATION_RATE:
+                    child_genome = self.mutate(child_genome)
+                new_generation.append(child_genome)
+        
+            population = new_generation
+            generation += 1
+    
+        formatted_best_genome = {param_name: param_value for param_name, param_value in best_genome}
+        return formatted_best_genome
+    
+    def generate_randint(self, min, max) -> int:
+        """ Generates random parameters """
+        return random.randint(min, max)

@@ -1,8 +1,9 @@
 # This file is used for testing 
-from utils import *
+# from utils import *
+from bt import Backtest, Strategy
+import pandas as pd
 
 def main():
-    # 1) Sample data query
     data = {
         'Date': ['2023-09-01', '2023-09-02', '2023-09-03', '2023-09-04', '2023-09-05'],
         'Open': [150.0, 151.2, 153.5, 152.8, 152.0],
@@ -17,20 +18,26 @@ def main():
 
     # 1b) Convert the 'Date' column to datetime format
     df['Date'] = pd.to_datetime(df['Date'])
+    df = df.set_index("Date")
 
-    # 1c)  Set the 'Date' column as the index (optional)
-    df.set_index('Date', inplace=True)
-
-    ohlcv = [df]
-    
-    
     # 2) Strategy Creation
     class CrossOver(Strategy):
-        def __init__(self, capital: float, commision: float, slippage: float, params: dict) -> None:
-            super().__init__(capital, commision, slippage, params)
-            
+        n1 = 10
+        n2 = 20
+        ema_period = 5
+        rsi_period = 5
+        upper_bound = 55
+        lower_bound = 10
+        
+
+        def init(self):
+            close = self.data.Close
+            # self.sma1 = self.I(SMA, close, self.n1)
+            # self.sma2 = self.I(SMA, close, self.n2)
+
         def next(self):
             pass
+
         
     # 3) Vanilla backtest
     strategy_params = {
@@ -40,30 +47,23 @@ def main():
         "lower_bound": 14,
     }         
 
-    strategy = CrossOver(capital=10_000, commision=0.02, slippage=0.01, params=strategy_params)
-    bt = Backtest(ohlcv, strategy)
-
-    # bt.run(ratio=0.7)
-    # bt.plot()
-    # bt.statistics()
+    bt = Backtest(df, strategy=CrossOver, cash=100_000)
     
-    # # 4) Event bias analysis
-    # bt.event_bias_analysis()
-
-    # 5) Optimisation
     strategy_params_limit = {
         "ema_period": [5, 200],
         "rsi_period": [5, 200],
         "upper_bound": [55, 90],
         "lower_bound": [10, 45],
     }
-
-    bt.optimise(strategy_params_limit)
     
-    # 6) Walk forward Optimisation
-    bt.run_walkforward(strategy_params_limit, 10, 0.7)
-    bt.plot()
-    bt.statistics()
+    result = bt.optimize(strategy_params_limit=strategy_params_limit)
+    bt.runWF(iter=1, strategy_params_limit=strategy_params_limit)
+    # bt.run(
+    #     ema_period=[5, 200],
+    #     rsi_period=[5, 200],
+    #     upper_bound=[55, 90],
+    #     lower_bound=[10, 45],
+    # )
     
 if __name__ == "__main__":
     main()

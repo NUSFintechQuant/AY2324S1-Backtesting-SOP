@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from enum import Enum
 from typing import Optional
 from sklearn.neighbors import LocalOutlierFactor
-# from ta.momentum import RSIIndicator
+from ta.momentum import RSIIndicator
 
 class Indicator:
     # TODO To be implemented by Justin
@@ -186,15 +186,12 @@ class GeneticAlgorithm:
 
     def breed(self, genome_a, genome_b):
         """ Breeds offspring from two parent genomes """
-        print(genome_a)
-        print(genome_b)
         child_genome = []
         for (param_name_a, param_value_a), (param_name_b, param_value_b) in zip(genome_a, genome_b):
             # Randomly choose parameter from parent A or B
             child_param_name = param_name_a if random.random() < 0.5 else param_name_b
             child_param_value = param_value_a if random.random() < 0.5 else param_value_b
             child_genome.append((child_param_name, child_param_value))
-        print(child_genome)
         return child_genome
     
     def calculate_fitness(self, strategy: Strategy, genome: [int]) -> int:
@@ -207,7 +204,6 @@ class GeneticAlgorithm:
         # stats = bt.statistics()
         
         # TODO do calculation with the stats for the fitness. Direction will be given by researcher
-
         
         return 1_000
     
@@ -222,8 +218,6 @@ class GeneticAlgorithm:
 
         strategy.reset()
         population = self.create_population(self.population_size)
-
-        print(population)
 
         found = False
         generation = 0
