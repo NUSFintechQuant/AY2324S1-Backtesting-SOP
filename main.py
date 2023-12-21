@@ -43,12 +43,12 @@ def main():
     strategy = CrossOver(capital=10_000, commision=0.02, slippage=0.01, params=strategy_params)
     bt = Backtest(ohlcv, strategy)
 
-    bt.run(ratio=0.7)
-    bt.plot()
-    bt.statistics()
+    # bt.run(ratio=0.7)
+    # bt.plot()
+    # bt.statistics()
     
-    # 4) Event bias analysis
-    bt.event_bias_analysis()
+    # # 4) Event bias analysis
+    # bt.event_bias_analysis()
 
     # 5) Optimisation
     strategy_params_limit = {
