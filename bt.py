@@ -1666,10 +1666,19 @@ class GeneticAlgorithm:
     
     def calculate_fitness(self, backtest: Backtest, genome: [int]) -> int:
         """ Evaluates the trading strategy """
+        print(genome)
         params = {param_name: param_value for param_name, param_value in genome}
         result = backtest.run(**params)
         
         # TODO do calculation with the stats for the fitness. Direction will be given by researcher
+        MAXIMISE = "Sharpe"
+        if MAXIMISE == None:
+            # run ryans function
+            return 
+        elif MAXIMISE == "sharpe":
+            return (getSharpeRatio(genome))
+        elif MAXIMISE == "drawdown":
+            return (-getDrawDown(genome))
         
         return 1_000
     
@@ -1684,6 +1693,13 @@ class GeneticAlgorithm:
 
         # backtest.reset()
         population = self.create_population(self.population_size)
+
+        # Population looks like this:
+        # [
+        #     [('param1', 7), ('param2', 0.75), ('param3', -3)],
+        #     [('param1', 3), ('param2', 0.2), ('param3', 2)],
+        #     [('param1', 9), ('param2', 0.95), ('param3', -1)],
+        # ]
 
         found = False
         generation = 0

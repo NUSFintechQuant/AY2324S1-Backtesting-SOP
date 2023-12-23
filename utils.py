@@ -204,6 +204,11 @@ class GeneticAlgorithm:
         # stats = bt.statistics()
         
         # TODO do calculation with the stats for the fitness. Direction will be given by researcher
+
+        MAXIMISE = None
+
+        if MAXIMISE == "Sharpe":
+            return 1_000
         
         return 1_000
     
