@@ -526,8 +526,7 @@ class Backtest:
         print(stats_df)
         return None
     
-    #add flag for Walk-Backwards
-    def runWF(self, iter, strategy_params_limit) -> pd.Series:
+    def runWF(self, iter, strategy_params_limit, backwards = False) -> pd.Series:
         if not strategy_params_limit:
             raise ValueError('Need some strategy parameters to optimize')
         data = self._data.copy(deep=False)
@@ -544,7 +543,13 @@ class Backtest:
         data_split = []
         date_range = []
         iter_data = []
-        for i in range(0, iter):
+        
+        # walk-backward flag
+        start = iter-1 if backwards else 0
+        stop = -1 if backwards else iter
+        step = -1 if backwards else 1
+
+        for i in range(start, stop, step):
             start = (iteration_points * i)
             end = start + (iteration_points * 4)
             if i == (iter):
@@ -554,8 +559,8 @@ class Backtest:
             date_range.append(data.index[end-1].strftime('%Y-%m-%d'))
             training = int((end - start) * split) + start
             iter_data.append([data.iloc[start:training],data.iloc[training:end]])#this is where splitting training and testing
-
-        
+        example_dates = [datetime.datetime.strptime(date, '%Y-%m-%d') for date in date_range]
+    
         plt.figure(figsize=(12, 6))
         for i in range(0, len(example_dates), 2):
             width_total = example_dates[i+1] - example_dates[i]
@@ -579,6 +584,7 @@ class Backtest:
         plt.xlabel('Date')
         plt.ylabel('Iteration')
         plt.title('Walk Forward Backtesting Iterations')
+        if backwards: plt.suptitle('(Backwards)')
         plt.gca().invert_yaxis()
         plt.show()
 
