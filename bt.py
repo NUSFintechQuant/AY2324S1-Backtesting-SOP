@@ -595,6 +595,9 @@ class Backtest:
             testing_data = iter_data[i][1] #testing data (25%)
             #training part first 75%
             self = Backtest(training_data, strategy=self._strategy)
+            
+            #Thre may need ot be something for GA to know if need to do another population
+
             stats = self.optimize(
                 strategy_params_limit=strategy_params_limit, 
                 maximize='Sharpe Ratio', 
@@ -739,6 +742,7 @@ class Backtest:
 
         def _optimize_genetic_algorithm():
             best_params = GeneticAlgorithm(strategy_params_limit).optimise(self)
+            print("test")
             return self.run(**best_params)
         
         return _optimize_genetic_algorithm()
@@ -1672,7 +1676,6 @@ class GeneticAlgorithm:
     
     def calculate_fitness(self, backtest: Backtest, genome: [int]) -> int:
         """ Evaluates the trading strategy """
-        print(genome)
         params = {param_name: param_value for param_name, param_value in genome}
         result = backtest.run(**params)
         
@@ -1681,8 +1684,8 @@ class GeneticAlgorithm:
         if MAXIMISE == None:
             # run ryans function
             return 
-        elif MAXIMISE == "sharpe":
-            return (getSharpeRatio(genome))
+        elif MAXIMISE == "Sharpe":
+            return result.sharpe_ratio
         elif MAXIMISE == "drawdown":
             return (-getDrawDown(genome))
         
