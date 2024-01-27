@@ -1684,10 +1684,10 @@ class GeneticAlgorithm:
         if MAXIMISE == None:
             # run ryans function
             return 
-        elif MAXIMISE == "Sharpe":
+        elif MAXIMISE == "sharpe":
             return result.sharpe_ratio
         elif MAXIMISE == "drawdown":
-            return (-getDrawDown(genome))
+            return result.drawdown
         
         return 1_000
     
