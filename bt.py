@@ -1680,14 +1680,14 @@ class GeneticAlgorithm:
         result = backtest.run(**params)
         
         # TODO do calculation with the stats for the fitness. Direction will be given by researcher
-        MAXIMISE = "Sharpe"
+        MAXIMISE = "sharpe"
         if MAXIMISE == None:
             # run ryans function
             return 
         elif MAXIMISE == "sharpe":
             return result.sharpe_ratio
         elif MAXIMISE == "drawdown":
-            return result.drawdown
+            return -result.drawdown
         
         return 1_000
     
