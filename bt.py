@@ -742,7 +742,6 @@ class Backtest:
 
         def _optimize_genetic_algorithm():
             best_params = GeneticAlgorithm(strategy_params_limit).optimise(self)
-            print("test")
             return self.run(**best_params)
         
         return _optimize_genetic_algorithm()
@@ -1681,13 +1680,14 @@ class GeneticAlgorithm:
         
         # TODO do calculation with the stats for the fitness. Direction will be given by researcher
         MAXIMISE = "sharpe"
+        print(result)
         if MAXIMISE == None:
             # run ryans function
             return 
         elif MAXIMISE == "sharpe":
-            return result.sharpe_ratio
+            return result["Sharpe Ratio"]
         elif MAXIMISE == "drawdown":
-            return -result.drawdown
+            return -result["Max. Drawdown [%]"]
         
         return 1_000
     
