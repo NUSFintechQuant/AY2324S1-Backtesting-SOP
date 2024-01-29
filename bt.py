@@ -595,6 +595,9 @@ class Backtest:
             testing_data = iter_data[i][1] #testing data (25%)
             #training part first 75%
             self = Backtest(training_data, strategy=self._strategy)
+            
+            #Thre may need ot be something for GA to know if need to do another population
+
             stats = self.optimize(
                 strategy_params_limit=strategy_params_limit, 
                 maximize='Sharpe Ratio', 
@@ -739,6 +742,7 @@ class Backtest:
 
         def _optimize_genetic_algorithm():
             best_params = GeneticAlgorithm(strategy_params_limit).optimise(self)
+            print("test")
             return self.run(**best_params)
         
         return _optimize_genetic_algorithm()
@@ -1676,6 +1680,14 @@ class GeneticAlgorithm:
         result = backtest.run(**params)
         
         # TODO do calculation with the stats for the fitness. Direction will be given by researcher
+        MAXIMISE = "sharpe"
+        if MAXIMISE == None:
+            # run ryans function
+            return 
+        elif MAXIMISE == "sharpe":
+            return result.sharpe_ratio
+        elif MAXIMISE == "drawdown":
+            return -result.drawdown
         
         return 1_000
     
@@ -1690,6 +1702,13 @@ class GeneticAlgorithm:
 
         # backtest.reset()
         population = self.create_population(self.population_size)
+
+        # Population looks like this:
+        # [
+        #     [('param1', 7), ('param2', 0.75), ('param3', -3)],
+        #     [('param1', 3), ('param2', 0.2), ('param3', 2)],
+        #     [('param1', 9), ('param2', 0.95), ('param3', -1)],
+        # ]
 
         found = False
         generation = 0
