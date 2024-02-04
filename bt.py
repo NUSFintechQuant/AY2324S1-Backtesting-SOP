@@ -1,3 +1,5 @@
+from sklearn.neighbors import LocalOutlierFactor
+from ta.momentum import RSIIndicator
 from abc import ABCMeta, abstractmethod
 from typing import Callable, Dict, List, Optional, Sequence, Tuple, Type, Union
 from _plotting import plot
@@ -524,7 +526,7 @@ class Backtest:
         typeCol = ['Optimization' if i % 2 == 0 else 'Testing' for i in range(len(stats_df))]
         stats_df.insert(2, "Type", typeCol)
         print(stats_df)
-        return None
+        return stats_df
     
     def runWF(self, iter, strategy_params_limit, backwards = False) -> pd.Series:
         if not strategy_params_limit:
@@ -617,7 +619,7 @@ class Backtest:
         typeCol = ['Optimization' if i % 2 == 0 else 'Testing' for i in range(len(stats_df))]
         stats_df.insert(2, "Type", typeCol)
         print(stats_df)
-        return None
+        return stats_df
     
     def runWalk(self, data) -> pd.Series:
         bt = Backtest(data, strategy=self._strategy)
@@ -742,7 +744,6 @@ class Backtest:
 
         def _optimize_genetic_algorithm():
             best_params = GeneticAlgorithm(strategy_params_limit).optimise(self)
-            print("test")
             return self.run(**best_params)
         
         return _optimize_genetic_algorithm()
@@ -840,24 +841,24 @@ class Backtest:
         save(layout)
         
     def event_bias_analysis(self):
-        # mock data
-        self.data[0] = pd.DataFrame({
-            'Date': pd.date_range(start='2020-01-01', periods=365, freq='D'),
-            'Close': np.cumsum(np.random.normal(0, 1, 365)) + 100  # Starting price at 100
-        })
-        vix_data = pd.DataFrame({
-            'Date': pd.date_range(start='2020-01-01', periods=365, freq='D'),
-            'Close': np.cumsum(np.random.normal(0, 1, 365)) + 20  # Starting price at 20
-        })
+        # # mock data
+        # self._data[0] = pd.DataFrame({
+        #     'Date': pd.date_range(start='2020-01-01', periods=365, freq='D'),
+        #     'Close': np.cumsum(np.random.normal(0, 1, 365)) + 100  # Starting price at 100
+        # })
+        # vix_data = pd.DataFrame({
+        #     'Date': pd.date_range(start='2020-01-01', periods=365, freq='D'),
+        #     'Close': np.cumsum(np.random.normal(0, 1, 365)) + 20  # Starting price at 20
+        # })
         # trade_data = pd.DataFrame({
         #     'Date': pd.date_range(start='2020-01-01', periods=365, freq='D'),
         #     'Returns': np.random.normal(-1, 1, 365)
         # })
 
         try:
-            self.local_outlier_factor()
-            self.vix_rsi(vix_data)
-            #self.outlier_analysis(trade_data) # to confirm how the trade_data is passed
+            local_outlier_factor_data = self.local_outlier_factor()
+            print(self.vix_rsi(self._data, local_outlier_factor_data))
+            self.outlier_analysis(self._results) # to confirm how the trade_data is passed
             #print(self.data[0])
         except Exception as e:
             print(e)
@@ -895,7 +896,7 @@ class Backtest:
     def local_outlier_factor(self, visualise = False):
         """ Removes outliers from price data via LOF """
         # pct change and mvg of quarter
-        p_data = self.data[0]
+        p_data = self._data
         p_data['P_Change'] = p_data['Close'].pct_change() * 100
         p_data['MA64'] =  p_data['P_Change'].rolling(window=64).mean()
         p_data['Sq_Diff'] = abs(p_data['P_Change'] - p_data['MA64'])
@@ -918,18 +919,18 @@ class Backtest:
             plt.show()
 
         # Remove identified outliers
-        self.data[0] = p_data[inliers]
+        return p_data[inliers]
 
-    def vix_rsi(self, vix_data, overbought_threshold=70, oversold_threshold=30, rsi_window=14):
+    def vix_rsi(self, vix_data, local_outlier_factor_data, overbought_threshold=70, oversold_threshold=30, rsi_window=14):
         """ Removes outliers from price data via VIX RSI """
         # Calculate RSI for the VIX data using ta library
-        p_data = self.data[0]
+        p_data = local_outlier_factor_data
         vix_data['VIX_RSI'] = RSIIndicator(close=vix_data['Close'], window=rsi_window).rsi()
         vix_data.drop('Close', axis=1, inplace=True)
 
         # Merge both price and vix data, then filter based on thresholds
         p_data = pd.merge(p_data, vix_data, on='Date', how='inner')
-        self.data[0] = p_data[(p_data['VIX_RSI'] <= overbought_threshold) & (p_data['VIX_RSI'] >= oversold_threshold)]
+        return p_data[(p_data['VIX_RSI'] <= overbought_threshold) & (p_data['VIX_RSI'] >= oversold_threshold)]
 
 
 class Order:
@@ -1681,13 +1682,16 @@ class GeneticAlgorithm:
         
         # TODO do calculation with the stats for the fitness. Direction will be given by researcher
         MAXIMISE = "sharpe"
+        print(result)
         if MAXIMISE == None:
             # run ryans function
             return 
         elif MAXIMISE == "sharpe":
-            return result.sharpe_ratio
+            return result["Sharpe Ratio"]
         elif MAXIMISE == "drawdown":
-            return -result.drawdown
+            return -result["Max. Drawdown [%]"]
+        elif MAXIMISE == "return":
+            return result["Return [%]"]
         
         return 1_000
     
@@ -1715,6 +1719,7 @@ class GeneticAlgorithm:
         while not found and generation < MAXIMUM_GENERATION:
             # Calculate fitness for each genome in the population
             fitness_scores = [self.calculate_fitness(backtest, genome) for genome in population]
+            # print("1. fitness_scores", fitness_scores)
             # Find the index of the best genome in the population
             best_genome_index = fitness_scores.index(max(fitness_scores))
             best_genome = population[best_genome_index]
@@ -1730,6 +1735,7 @@ class GeneticAlgorithm:
             elite_count = int(0.1 * self.population_size)
             # Gets the indeces of the highest fitness scores
             elites = sorted(range(len(fitness_scores)), key=lambda k: fitness_scores[k])[-elite_count:]
+            # print("2. fitness_scores", fitness_scores)
 
             # Add elites to the new generation
             new_generation.extend([population[i] for i in elites])
